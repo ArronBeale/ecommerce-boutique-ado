@@ -1,3 +1,6 @@
+import json
+import time
+
 from django.http import HttpResponse
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
@@ -6,9 +9,6 @@ from django.conf import settings
 from .models import Order, OrderLineItem
 from products.models import Product
 from profiles.models import UserProfile
-
-import json
-import time
 
 
 class StripeWH_Handler:
@@ -22,6 +22,7 @@ class StripeWH_Handler:
         cust_email = order.email
         subject = render_to_string(
             'checkout/confirmation_emails/confirmation_email_subject.txt',
+
             {'order': order})
         body = render_to_string(
             'checkout/confirmation_emails/confirmation_email_body.txt',
@@ -77,10 +78,13 @@ class StripeWH_Handler:
 
         order_exists = False
         attempt = 1
+        # wile loop will make 5 attempts to check if order was already created
         while attempt <= 5:
             try:
+                # gets order details from the database
                 order = Order.objects.get(
                     full_name__iexact=shipping_details.name,
+                    # iexact ignores the uppercase
                     email__iexact=billing_details.email,
                     phone_number__iexact=shipping_details.phone,
                     country__iexact=shipping_details.address.country,
@@ -93,17 +97,22 @@ class StripeWH_Handler:
                     original_bag=bag,
                     stripe_pid=pid,
                 )
+                # breaks out of the loop if order exists
                 order_exists = True
                 break
             except Order.DoesNotExist:
                 attempt += 1
                 time.sleep(1)
         if order_exists:
+            # by this time order has definitely been completed. webhook will send
+            # email confirmation to the user
             self._send_confirmation_email(order)
+            # if order exists returns 200 response
             return HttpResponse(
                 content=f'Webhook received: {event["type"]} | SUCCESS: Verified order already in database',
                 status=200)
         else:
+            # creates a new order
             order = None
             try:
                 order = Order.objects.create(
@@ -140,11 +149,16 @@ class StripeWH_Handler:
                             order_line_item.save()
             except Exception as e:
                 if order:
+                    # deletes order if any errors occured and returns 500 error response
+                    # to stripe
                     order.delete()
                 return HttpResponse(
                     content=f'Webhook received: {event["type"]} | ERROR: {e}',
                     status=500)
+        # if the order has been created by the webhook handler
+        # the email is sent after the order was created
         self._send_confirmation_email(order)
+        # returns status 200 response
         return HttpResponse(
             content=f'Webhook received: {event["type"]} | SUCCESS: Created order in webhook',
             status=200)
